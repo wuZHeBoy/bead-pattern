@@ -1,0 +1,60 @@
+# bead-pattern · 图片转拼豆图纸生成器
+
+把任意图片转成拼豆(perler / hama / fuse beads)图纸:像素化 + 按品牌色卡做
+**CIEDE2000 感知色差匹配**,产出带色号的网格图、备料清单、可打印 PDF。
+
+作为 Claude Code Skill 使用(见 `SKILL.md`),也可直接命令行调用。
+
+## 效果示例
+同一张图,简易档(限色去杂、好拼)与精细档(高还原):
+
+| 简易档 pattern | 简易档备料清单 | 精细档 pattern |
+|---|---|---|
+| ![simple](examples/mushroom-simple-pattern.png) | ![list](examples/mushroom-simple-shopping.png) | ![fine](examples/mushroom-fine-pattern.png) |
+
+> 图纸带色号、行列坐标、每 10 格粗线与单板(29×29)红色板界;背景自动去除显示为空格。
+
+## 快速开始
+```bash
+cd ~/bead-pattern
+# 首次:环境已在 .venv,若需重建:
+#   python3 -m venv .venv && ./.venv/bin/pip install Pillow numpy
+
+# 生成示例测试图
+./.venv/bin/python scripts/make_sample.py
+
+# 简易档(咪小窝色卡,限色去杂,好拼)
+./.venv/bin/python scripts/generate.py assets/samples/mushroom.png --palette mixiaowo --mode simple
+
+# 精细档(MARD 色卡,高还原)
+./.venv/bin/python scripts/generate.py assets/samples/mushroom.png --palette mard --mode fine
+```
+
+## 流水线
+```
+图片 →(去背景)→ 缩放到网格 → 主导色像素化 → CIEDE2000 匹配到色卡
+     →(可选:抖动 / 限色 / 去杂)→ 图纸 PNG + 备料 CSV/PNG + 打印 PDF
+```
+
+## 技术选型
+- **色差算法**:CIEDE2000(CIE-Lab 感知色差,numpy 向量化手写,零重依赖),比 RGB 欧氏更准。
+- **去背景**:默认轻量洪水填充(纯色底);照片可选 `rembg` AI 抠图(按需装)。
+- **精细/简易两档**:分辨率 + 限色 + 去杂的预设组合,`--dither` 单独控制照片抖动。
+- **色卡**:咪小窝 / MARD / COCO / 漫漫 / 盼盼,各 ~291 色(色号↔RGB)。
+
+## 目录
+```
+bead-pattern/
+├─ SKILL.md                 # Claude Code 技能入口
+├─ scripts/
+│  ├─ generate.py           # 主流水线 CLI
+│  ├─ build_palettes.py     # 从来源数据构建各品牌调色板
+│  └─ make_sample.py        # 生成零版权测试图
+├─ palettes/                # mixiaowo/mard/coco/manman/panpan .json
+├─ references/source.md     # 色卡数据来源与许可(clean-room 说明)
+├─ assets/samples/          # 测试图
+└─ output/                  # 生成结果
+```
+
+## 许可
+算法代码原创;色卡为事实型数据,来源与许可见 `references/source.md`。

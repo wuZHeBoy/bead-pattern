@@ -1,0 +1,7 @@
+.venv/
+output/
+__pycache__/
+*.pyc
+.DS_Store
+# 下载的第三方测试照片不入库(仅本地测试用);仓库示例只用自绘零版权素材
+assets/samples/photo_*
