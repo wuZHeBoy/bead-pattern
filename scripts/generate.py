@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import shutil
 import sys
 from collections import Counter, deque
 from pathlib import Path
@@ -29,12 +30,19 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parent.parent
 PALETTE_DIR = ROOT / "palettes"
 
-# 常见成品规格(格子数),midi=5mm 单板 29×29
+# 国内店铺通行规格:midi 豆直径 5mm,标准方板 29×29 格(14.5×14.5cm),可多板拼接
+BOARD = 29
+BEAD_MM = 5.0
+
+# 常见成品规格(格子数)
 SIZE_PRESETS = {
     "29x29": (29, 29),
     "58x58": (58, 58),
     "29x58": (29, 58),
     "58x29": (58, 29),
+    "87x87": (87, 87),
+    "58x87": (58, 87),
+    "87x58": (87, 58),
 }
 
 # ---------------------------------------------------------------------------
@@ -147,6 +155,11 @@ def load_palette(name: str) -> Palette:
         avail = ", ".join(sorted(p.stem for p in PALETTE_DIR.glob("*.json")))
         sys.exit(f"[错误] 找不到色卡 '{name}'。可用:{avail}")
     rows = json.loads(path.read_text(encoding="utf-8"))
+    # 兜底剔除占位色号:某品牌无此色时源数据写 "-",若混进来会出现在图纸和
+    # 备料表里,而顾客买不到这个"色号"。构建期已过滤,这里防手改/旧文件。
+    rows = [r for r in rows if str(r.get("code", "")).strip() not in {"", "-", "—", "/", "N/A"}]
+    if not rows:
+        sys.exit(f"[错误] 色卡 '{name}' 没有有效色号。")
     return Palette(name, rows)
 
 
@@ -165,6 +178,44 @@ def remove_bg_ai(img: Image.Image) -> Image.Image:
             "(首次运行会自动下载 ~170MB 模型)"
         )
     return remove(img.convert("RGBA"))
+
+
+def crop_to_subject(img: Image.Image, pad: int = 0) -> Image.Image:
+    """裁到不透明主体的外接框,丢掉四周纯背景。
+
+    去背景后主体常只占画面一小半,裁掉留白等于把格子预算全花在主体上,
+    同样的 --max-side 能换到明显更高的有效分辨率(细节靠格子数,不靠色数)。
+    """
+    a = np.array(img.convert("RGBA"))
+    ys, xs = np.where(a[:, :, 3] > 128)
+    if len(ys) == 0:
+        return img
+    x0, x1 = max(int(xs.min()) - pad, 0), min(int(xs.max()) + 1 + pad, img.width)
+    y0, y1 = max(int(ys.min()) - pad, 0), min(int(ys.max()) + 1 + pad, img.height)
+    return img.crop((x0, y0, x1, y1))
+
+
+def crop_to_aspect(img: Image.Image, gw: int, gh: int) -> Image.Image:
+    """中心裁剪到 gw:gh 比例,让图铺满整板(而不是留透明边)。
+
+    裁剪中心取不透明主体的外接框中心,而非画面几何中心 —— 主体常不居中,
+    按几何中心裁会把主体推出画面。
+    """
+    target = gw / gh
+    cur = img.width / img.height
+    if abs(target - cur) < 1e-6:
+        return img
+    a = np.array(img.convert("RGBA"))
+    ys, xs = np.where(a[:, :, 3] > 128)
+    cx = (int(xs.min()) + int(xs.max())) / 2 if len(xs) else img.width / 2
+    cy = (int(ys.min()) + int(ys.max())) / 2 if len(ys) else img.height / 2
+    if target > cur:                      # 目标更宽 -> 裁高度
+        nw, nh = img.width, int(round(img.width / target))
+    else:                                 # 目标更高 -> 裁宽度
+        nw, nh = int(round(img.height * target)), img.height
+    x0 = int(round(min(max(cx - nw / 2, 0), img.width - nw)))
+    y0 = int(round(min(max(cy - nh / 2, 0), img.height - nh)))
+    return img.crop((x0, y0, x0 + nw, y0 + nh))
 
 
 def to_grid(img: Image.Image, gw: int, gh: int, fit: bool) -> np.ndarray:
@@ -375,8 +426,13 @@ def render_pattern(idx: np.ndarray, pal: Palette, board: Optional[int]) -> Image
     distinct = len(set(int(v) for v in idx[idx >= 0].ravel()))
     total = int((idx >= 0).sum())
     d.text((gutter, 16), f"拼豆图纸 · {pal.name}", font=title_font, fill=(20, 20, 20))
-    d.text((gutter, 48),
-           f"{gw}×{gh} 格 · {distinct} 色 · 共 {total} 颗", font=sub_font, fill=(90, 90, 90))
+    spec = f"{gw}×{gh} 格 · {distinct} 色 · 共 {total} 颗"
+    # 成品尺寸与用板数:店铺报价、包装、发货都按这两个走
+    spec += f" · 成品 {gw * BEAD_MM / 10:.1f}×{gh * BEAD_MM / 10:.1f}cm"
+    if board:
+        bx, by = -(-gw // board), -(-gh // board)
+        spec += f" · {bx}×{by}={bx * by} 块 {board}×{board} 方板"
+    d.text((gutter, 48), spec, font=sub_font, fill=(90, 90, 90))
 
     ox, oy = gutter, title_h + gutter
     checker = (245, 245, 245)
@@ -483,7 +539,11 @@ def parse_size(size: str, max_side: int, img: Image.Image) -> Tuple[int, int, bo
         return gw, gh, True, 29
     if "x" in size:
         w, h = size.lower().split("x")
-        return int(w), int(h), True, None
+        gw, gh = int(w), int(h)
+        # 自定义尺寸若正好是单板(29)的整数倍,仍要画板界线:顾客按板拼、按板买,
+        # 没有板界线就不知道在哪儿分板。非整数倍才没有板可对齐,不画。
+        board = BOARD if (gw % BOARD == 0 and gh % BOARD == 0) else None
+        return gw, gh, True, board
     sys.exit(f"[错误] 无法识别的 --size '{size}'(用 auto / 29x29 / 58x58 / 宽x高)")
 
 
@@ -509,8 +569,8 @@ def apply_mode_defaults(args: argparse.Namespace) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="图片 → 拼豆图纸生成器")
     ap.add_argument("image", help="输入图片路径")
-    ap.add_argument("--palette", default="mixiaowo",
-                    help="色卡:mixiaowo/mard/coco/manman/panpan(默认 mixiaowo)")
+    ap.add_argument("--palette", default="manman",
+                    help="色卡:manman/mard/coco/mixiaowo/panpan(默认 manman,字母+数字色号)")
     ap.add_argument("--mode", choices=["fine", "simple"], default="simple",
                     help="精细(高还原)/ 简易(限色去杂,好拼)。默认 simple")
     ap.add_argument("--size", default="auto",
@@ -524,6 +584,10 @@ def main() -> None:
                     help="关闭杂点清理")
     ap.add_argument("--remove-bg", choices=["none", "flood", "ai"], default="flood",
                     help="去背景:flood(轻量洪水填充,默认)/ ai(rembg 抠图)/ none")
+    ap.add_argument("--fill", action="store_true",
+                    help="裁到目标比例铺满整板(配固定 --size 用),而不是留透明边")
+    ap.add_argument("--crop-subject", action="store_true",
+                    help="去背景后裁到主体外接框,把格子预算全花在主体上(推荐配 --remove-bg ai)")
     ap.add_argument("--out", default=None, help="输出目录(默认 output/<图片名>)")
     args = ap.parse_args()
 
@@ -535,13 +599,34 @@ def main() -> None:
     out_dir = Path(args.out) if args.out else (ROOT / "output" / f"{src.stem}-{args.mode}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # 归档原图,方便日后换参数重跑(源文件可能被移动或删除)
+    archived = out_dir / f"source{src.suffix.lower()}"
+    if archived.resolve() != src.resolve():
+        shutil.copy2(src, archived)
+
     pal = load_palette(args.palette)
     img = Image.open(src).convert("RGBA")
 
     if args.remove_bg == "ai":
         img = remove_bg_ai(img)
 
+    if args.crop_subject:
+        if args.remove_bg == "none":
+            print("[提示] --crop-subject 需要先去背景才有 alpha 可裁,本次跳过。")
+        else:
+            before = img.size
+            img = crop_to_subject(img)
+            if img.size != before:
+                print(f"[裁剪] {before[0]}x{before[1]} -> {img.size[0]}x{img.size[1]}")
+
     gw, gh, fit, board = parse_size(args.size, args.max_side, img)
+    if args.fill and fit:
+        before = img.size
+        img = crop_to_aspect(img, gw, gh)
+        if img.size != before:
+            cut = 100 * (1 - (img.width * img.height) / (before[0] * before[1]))
+            print(f"[裁比例] {before[0]}x{before[1]} -> {img.size[0]}x{img.size[1]}"
+                  f"(裁掉 {cut:.1f}%,铺满整板)")
     grid = to_grid(img, gw, gh, fit)
     rgb = grid[:, :, :3].astype(np.float64)
     alpha = grid[:, :, 3]
@@ -582,12 +667,28 @@ def main() -> None:
     pdf_path = out_dir / "pattern.pdf"
     pattern.convert("RGB").save(pdf_path, save_all=True, append_images=[list_img.convert("RGB")])
 
+    # 记录本次参数,配合 source 图即可原样重跑
+    recipe_path = out_dir / "recipe.json"
+    recipe_path.write_text(json.dumps({
+        "source": archived.name,
+        "palette": args.palette,
+        "mode": args.mode,
+        "size": f"{gw}x{gh}",
+        "dither": args.dither,
+        "despeckle": bool(args.despeckle),
+        "max_colors": args.max_colors,
+        "remove_bg": args.remove_bg,
+        "crop_subject": bool(args.crop_subject),
+        "fill": bool(args.fill),
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+
     total = sum(r[2] for r in rows)
     print(f"✓ 完成:{gw}×{gh} 格 · {len(rows)} 色 · {total} 颗豆")
     print(f"  图纸    {pattern_path}")
     print(f"  备料表  {csv_path}")
     print(f"  备料图  {list_path}")
     print(f"  打印版  {pdf_path}")
+    print(f"  原图    {archived}")
     print("  TOP5 用量:" + " ".join(f"{c}×{n}" for c, _, n in rows[:5]))
 
 

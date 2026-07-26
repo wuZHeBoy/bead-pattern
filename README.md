@@ -5,6 +5,8 @@
 
 作为 Claude Code Skill 使用(见 `SKILL.md`),也可直接命令行调用。
 
+![showcase](examples/showcase.png)
+
 ## 效果示例
 同一张图,简易档(限色去杂、好拼)与精细档(高还原):
 
@@ -28,7 +30,15 @@ cd ~/bead-pattern
 
 # 精细档(MARD 色卡,高还原)
 ./.venv/bin/python scripts/generate.py assets/samples/mushroom.png --palette mard --mode fine
+
+# 照片最高还原:AI 抠图 + 裁到主体 + 提高格子密度
+./.venv/bin/python scripts/generate.py assets/samples/seal-buddha.jpg \
+  --mode fine --max-side 80 --remove-bg ai --crop-subject
 ```
+
+还原度不够时,优先加格子(`--max-side`)、开 `--crop-subject`,而不是加色号:
+小面积深色特征(眼睛、鼻头、爪尖)需要占到成片格子才认得出,
+格子太少时 `--despeckle` 会把它们当噪点清掉,脸就被抹平。
 
 ## 流水线
 ```
@@ -49,11 +59,15 @@ bead-pattern/
 ├─ scripts/
 │  ├─ generate.py           # 主流水线 CLI
 │  ├─ build_palettes.py     # 从来源数据构建各品牌调色板
-│  └─ make_sample.py        # 生成零版权测试图
+│  ├─ make_sample.py        # 生成零版权测试图
+│  ├─ silhouette.py         # 从 pattern.png 反推主体轮廓(ASCII,校验形状)
+│  └─ keep_main.py          # 只保留 alpha 最大连通域(剔除主体旁零碎)
 ├─ palettes/                # mixiaowo/mard/coco/manman/panpan .json
 ├─ references/source.md     # 色卡数据来源与许可(clean-room 说明)
 ├─ assets/samples/          # 测试图
 └─ output/                  # 生成结果
+   └─ <名>-<档>/            # pattern.png/pdf + shopping-list.csv/png
+                            # + source.<ext>(原图归档)+ recipe.json(参数)
 ```
 
 ## 许可

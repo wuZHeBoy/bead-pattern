@@ -39,7 +39,9 @@ def main() -> None:
         seen_codes = set()
         for hex_code, mapping in data.items():
             code = mapping.get(brand_key)
-            if not code:
+            # "-" 是源数据里的"该品牌无此色"占位符(如漫漫缺 #55514C),
+            # 不能当色号收进来:顾客买不到"-",且它会抢走匹配、挤掉真实近似色。
+            if not code or str(code).strip() in {"", "-", "—", "/", "N/A"}:
                 continue
             # 同一色号可能对应多个近似 HEX,保留首个,避免备料表重复色号
             if code in seen_codes:
