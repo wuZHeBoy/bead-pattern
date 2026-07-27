@@ -16,6 +16,22 @@
 
 > 图纸带色号、行列坐标、每 10 格粗线与单板(29×29)红色板界;背景自动去除显示为空格。
 
+### 实拍照片(MARD 色卡,精细档)
+`--palette mard --mode fine --remove-bg ai --crop-subject --max-side 80`:
+
+| 原图 | 图纸(带色号) | 成品预览 | 备料清单 |
+|---|---|---|---|
+| ![佛像原图](assets/samples/seal-buddha.jpg) | ![佛像图纸](examples/seal-buddha-mard-pattern.png) | ![佛像预览](examples/seal-buddha-mard-preview.png) | ![佛像清单](examples/seal-buddha-mard-shopping.png) |
+| ![十字原图](assets/samples/seal-cross.jpg) | ![十字图纸](examples/seal-cross-mard-pattern.png) | ![十字预览](examples/seal-cross-mard-preview.png) | |
+
+佛像 71×80 格 · 39 色 · 4186 颗;十字 59×80 格 · 27 色 · 2018 颗。
+图纸(`pattern.png`)写色号给人照着拼,成品预览(`preview.py`)不写字只把每格画成
+一颗带孔的圆豆,用来在开拼之前判断像不像 —— 两者用的是同一份量化结果。
+
+佛像那版发灰是原图所致,不是流水线问题:该照片最暗的 5% 也只到 135(十字能压到 39),
+主体只占明度范围上面三分之一,量化后前两个浅暖灰吃掉将近一半格子。平光照片要拉开层次,
+需在配色之前先做对比度/色阶拉伸。
+
 ## 快速开始
 ```bash
 cd ~/bead-pattern
@@ -56,10 +72,14 @@ cd ~/bead-pattern
 ```
 bead-pattern/
 ├─ SKILL.md                 # Claude Code 技能入口
+├─ CHANGELOG.md             # 更新日志
 ├─ scripts/
 │  ├─ generate.py           # 主流水线 CLI
+│  ├─ preview.py            # 成品预览图(带孔圆豆,开拼前看效果)
 │  ├─ build_palettes.py     # 从来源数据构建各品牌调色板
 │  ├─ make_sample.py        # 生成零版权测试图
+│  ├─ make_showcase.py      # 拼 README 的对比展示图
+│  ├─ wb.py                 # 白点校正(暖调逆光照片拉回中性白)
 │  ├─ silhouette.py         # 从 pattern.png 反推主体轮廓(ASCII,校验形状)
 │  └─ keep_main.py          # 只保留 alpha 最大连通域(剔除主体旁零碎)
 ├─ palettes/                # mixiaowo/mard/coco/manman/panpan .json
